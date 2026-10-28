@@ -30,7 +30,9 @@ pub fn run(config: &Config, opts: Options) -> Result<()> {
     let scope = Scope::Local { base: &base };
     let out_dir = review::out_dir("local")?;
     let (findings, used) = review::collect(config, &opts.reviewers, scope, &out_dir)?;
-    println!("{}", comment::render_findings(&findings, &used));
+    let review_report = comment::render_findings(&findings, &used);
+    println!("{review_report}");
+    review::open_report(&out_dir, &review_report);
     if findings.is_empty() || !opts.fix {
         return Ok(());
     }
@@ -39,7 +41,9 @@ pub fn run(config: &Config, opts: Options) -> Result<()> {
     let report = fix::apply(config, scope, &items, &listing)?;
     let changes = if git::changes_since(&base)? == before { Changes::None } else { Changes::Uncommitted };
     let outcome = FixOutcome { items: &items, report: &report, changes };
-    println!("{}", outcome.render());
+    let fix_report = outcome.render();
+    println!("{fix_report}");
+    review::open_report(&out_dir, &format!("{review_report}\n{fix_report}"));
     if !outcome.is_green() {
         bail!("not everything is green; see the summary above");
     }

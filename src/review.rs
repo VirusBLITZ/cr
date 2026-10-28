@@ -1,8 +1,10 @@
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use anyhow::{Result, bail};
 
 use crate::agent::{self, Mode, Scope};
+use crate::cmd;
 use crate::comment;
 use crate::config::{Agent, Config};
 use crate::finding::{self, Finding, Merged};
@@ -19,7 +21,9 @@ pub fn run(config: &Config, host: &dyn Host, pr: &Pr, opts: Options) -> Result<(
     git::fetch(&pr.base)?;
     let out_dir = out_dir(&pr.number.to_string())?;
     let (findings, used) = collect(config, &opts.reviewers, Scope::Pr(pr), &out_dir)?;
-    println!("{}", comment::render_findings(&findings, &used));
+    let report = comment::render_findings(&findings, &used);
+    println!("{report}");
+    open_report(&out_dir, &report);
 
     let body = comment::render_review(&findings, &used);
     save(&out_dir, "review.md", &body);
@@ -107,6 +111,19 @@ fn merge(merger: &Agent, scope: Scope, reviews: &[(String, String)]) -> Result<V
         f.id = format!("F{}", i + 1);
     }
     Ok(findings)
+}
+
+/// Writes the formatted report to `<out_dir>/report.md` and, inside a VS Code
+/// terminal, opens it in the editor, where the markdown is easier to read.
+pub fn open_report(out_dir: &Path, markdown: &str) {
+    save(out_dir, "report.md", markdown);
+    if std::env::var_os("TERM_PROGRAM").is_none_or(|t| t != "vscode") {
+        return;
+    }
+    let path = out_dir.join("report.md");
+    if let Err(e) = cmd::run(Command::new("code").arg("--reuse-window").arg(&path), None) {
+        eprintln!("warning: could not open the report in VS Code: {e:#}");
+    }
 }
 
 /// Saves a raw output; failures here are not fatal.
