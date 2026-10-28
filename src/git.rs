@@ -49,3 +49,33 @@ pub fn commit_and_push(message: &str) -> Result<String> {
     git(&["push"])?;
     git(&["rev-parse", "--short", "HEAD"])
 }
+
+/// The branch local changes are compared against: origin's default branch,
+/// else a local `main` or `master`.
+pub fn default_base() -> Result<String> {
+    if let Ok(base) = git(&["symbolic-ref", "--short", "refs/remotes/origin/HEAD"]) {
+        return Ok(base);
+    }
+    for branch in ["main", "master"] {
+        if git(&["rev-parse", "--verify", "--quiet", branch]).is_ok() {
+            return Ok(branch.to_owned());
+        }
+    }
+    bail!("could not determine the base branch; pass --base")
+}
+
+/// Fingerprint of everything that differs from `base`: the diff since the
+/// merge base plus untracked files and their contents. Equal fingerprints
+/// mean nothing changed.
+pub fn changes_since(base: &str) -> Result<String> {
+    let merge_base = git(&["merge-base", base, "HEAD"])?;
+    let diff = git(&["diff", &merge_base])?;
+    let untracked = git(&["ls-files", "--others", "--exclude-standard"])?;
+    let mut fingerprint = format!("{diff}\n{untracked}");
+    if !untracked.is_empty() {
+        let mut args = vec!["hash-object", "--"];
+        args.extend(untracked.lines());
+        fingerprint.push_str(&git(&args)?);
+    }
+    Ok(fingerprint.trim().to_owned())
+}

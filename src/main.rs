@@ -6,6 +6,7 @@ mod finding;
 mod fix;
 mod git;
 mod host;
+mod local;
 mod review;
 mod status;
 mod target;
@@ -13,7 +14,7 @@ mod target;
 use anyhow::{Result, bail};
 use clap::{Parser, Subcommand};
 
-use config::{Config, Tool};
+use config::{Agent, Config, Tool};
 use host::{Host, Pr};
 
 /// Review and fix pull requests with codex and claude.
@@ -50,6 +51,20 @@ enum Command {
         #[arg(long)]
         no_comment: bool,
     },
+    /// Review local work against a base branch, then fix the findings. No PR needed;
+    /// nothing is committed, pushed, or posted.
+    #[command(visible_alias = "l")]
+    Local {
+        /// Branch or ref to compare against (default: origin's default branch, else main/master).
+        #[arg(long)]
+        base: Option<String>,
+        /// Only review; don't fix.
+        #[arg(long)]
+        no_fix: bool,
+        /// Only run the configured reviewers using these tools.
+        #[arg(long, value_delimiter = ',')]
+        reviewers: Vec<Tool>,
+    },
     /// Write a config file with the default settings.
     #[command(visible_alias = "init-config")]
     Init {
@@ -74,30 +89,37 @@ fn main() -> Result<()> {
     let root = git::repo_root()?;
     std::env::set_current_dir(&root)?;
     let config = Config::load(&root)?;
-    let host = host::detect(&config)?;
 
     match cli.command {
+        Command::Local { base, no_fix, reviewers } => {
+            let reviewers = select_reviewers(&config, &reviewers)?;
+            local::run(&config, local::Options { base, fix: !no_fix, reviewers })
+        }
         Command::Review { target, no_comment, reviewers } => {
-            let reviewers: Vec<_> = config
-                .reviewers
-                .iter()
-                .filter(|a| reviewers.is_empty() || reviewers.contains(&a.tool))
-                .cloned()
-                .collect();
-            if reviewers.is_empty() {
-                bail!("no configured reviewer matches --reviewers");
-            }
+            let reviewers = select_reviewers(&config, &reviewers)?;
+            let host = host::detect(&config)?;
             let pr = checkout(host.as_ref(), target.as_deref())?;
             let opts = review::Options { comment: config.auto_comment && !no_comment, reviewers };
             review::run(&config, host.as_ref(), &pr, opts)
         }
         Command::Fix { target, no_push, no_comment } => {
+            let host = host::detect(&config)?;
             let pr = checkout(host.as_ref(), target.as_deref())?;
             let opts = fix::Options { push: !no_push, comment: config.auto_comment && !no_comment };
             fix::run(&config, host.as_ref(), &pr, opts)
         }
         Command::Init { .. } => unreachable!("handled above"),
     }
+}
+
+/// The configured reviewers, limited to `tools` when any are given.
+fn select_reviewers(config: &Config, tools: &[Tool]) -> Result<Vec<Agent>> {
+    let reviewers: Vec<_> =
+        config.reviewers.iter().filter(|a| tools.is_empty() || tools.contains(&a.tool)).cloned().collect();
+    if reviewers.is_empty() {
+        bail!("no configured reviewer matches --reviewers");
+    }
+    Ok(reviewers)
 }
 
 fn checkout(host: &dyn Host, target: Option<&str>) -> Result<Pr> {

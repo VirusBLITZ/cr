@@ -70,10 +70,17 @@ pub struct Item {
     pub title: String,
 }
 
+/// What happened to the fixer's code changes.
+pub enum Changes<'a> {
+    None,
+    Pushed(&'a str),
+    Uncommitted,
+}
+
 pub struct FixOutcome<'a> {
     pub items: &'a [Item],
     pub report: &'a FixReport,
-    pub commit: Option<&'a str>,
+    pub changes: Changes<'a>,
 }
 
 impl FixOutcome<'_> {
@@ -85,16 +92,21 @@ impl FixOutcome<'_> {
         all_handled && checks_pass
     }
 
+    /// The PR comment: the summary plus the marker cr uses to recognise it.
+    pub fn comment(&self) -> String {
+        format!("{FIX_MARKER}\n{}", self.render())
+    }
+
     pub fn render(&self) -> String {
-        let mut out = format!("{FIX_MARKER}\n");
-        if self.is_green() {
-            out.push_str("## cr fix: all findings addressed, checks green ✅\n\n");
+        let mut out = if self.is_green() {
+            "## cr fix: all findings addressed, checks green ✅\n\n".to_owned()
         } else {
-            out.push_str("## cr fix: not everything is green ⚠️\n\n");
-        }
-        match self.commit {
-            Some(sha) => writeln!(out, "Fixes pushed in {sha}.\n").unwrap(),
-            None => out.push_str("No code changes were needed.\n\n"),
+            "## cr fix: not everything is green ⚠️\n\n".to_owned()
+        };
+        match self.changes {
+            Changes::None => out.push_str("No code changes were needed.\n\n"),
+            Changes::Pushed(sha) => writeln!(out, "Fixes pushed in {sha}.\n").unwrap(),
+            Changes::Uncommitted => out.push_str("Fixes are left uncommitted in the working tree.\n\n"),
         }
 
         out.push_str("| ID | Status | Finding | Note |\n|---|---|---|---|\n");
@@ -166,14 +178,14 @@ mod tests {
             ],
             checks: vec![Check { command: "cargo test".into(), passed: true }],
         };
-        assert!(FixOutcome { items: &items, report: &report, commit: None }.is_green());
+        assert!(FixOutcome { items: &items, report: &report, changes: Changes::None }.is_green());
 
         report.checks[0].passed = false;
-        assert!(!FixOutcome { items: &items, report: &report, commit: None }.is_green());
+        assert!(!FixOutcome { items: &items, report: &report, changes: Changes::None }.is_green());
 
         report.checks[0].passed = true;
         report.results.pop();
-        let outcome = FixOutcome { items: &items, report: &report, commit: None };
+        let outcome = FixOutcome { items: &items, report: &report, changes: Changes::None };
         assert!(!outcome.is_green());
         assert!(outcome.render().contains("| C1 | ⚠️ not reported |"));
     }

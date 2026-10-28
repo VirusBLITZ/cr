@@ -20,39 +20,74 @@ pub enum Mode {
     Write,
 }
 
+/// What a review or fix is about.
+#[derive(Clone, Copy)]
+pub enum Scope<'a> {
+    Pr(&'a Pr),
+    /// Local work, committed and uncommitted, against a base ref. No PR needed.
+    Local { base: &'a str },
+}
+
+impl Scope<'_> {
+    /// Git ref the changes are compared against.
+    pub fn base_ref(&self) -> String {
+        match self {
+            Scope::Pr(pr) => format!("origin/{}", pr.base),
+            Scope::Local { base } => base.to_string(),
+        }
+    }
+
+    pub fn title(&self) -> String {
+        match self {
+            Scope::Pr(pr) => format!("PR #{}", pr.number),
+            Scope::Local { base } => format!("local changes against {base}"),
+        }
+    }
+
+    /// Sentence fragment telling an agent exactly which changes to look at.
+    pub fn describe(&self) -> String {
+        match self {
+            Scope::Pr(pr) => format!(
+                "PR #{}: the changes on branch `{}` against `origin/{}` (`git diff origin/{}...HEAD`)",
+                pr.number, pr.head, pr.base, pr.base
+            ),
+            Scope::Local { base } => format!(
+                "the local changes against `{base}`, both committed and uncommitted \
+                 (`git diff $(git merge-base {base} HEAD)` plus untracked files from `git status`)"
+            ),
+        }
+    }
+}
+
 const CLAUDE_READ_TOOLS: &str = "Read,Grep,Glob,Bash(git:*),Bash(gh:*)";
 const CLAUDE_WRITE_TOOLS: &str = "Read,Grep,Glob,Edit,Write,Bash";
 
-/// Runs the agent's review skill, or the tool's built-in review, against the PR.
-pub fn review(agent: &Agent, pr: &Pr) -> Result<String> {
+/// Runs the agent's review skill, or the tool's built-in review, on `scope`.
+pub fn review(agent: &Agent, scope: Scope) -> Result<String> {
     match (agent.tool, &agent.skill) {
         (Tool::Codex, Some(skill)) => {
-            let prompt = format!(
-                "${skill} Review PR #{}: the changes on branch `{}` against `origin/{}` \
-                 (`git diff origin/{}...HEAD`). Do not change any files.",
-                pr.number, pr.head, pr.base, pr.base
-            );
+            let prompt = format!("${skill} Review {}. Do not change any files.", scope.describe());
             run(agent, &prompt, Mode::ReadOnly, None)
         }
-        (Tool::Claude, Some(skill)) => {
+        (Tool::Claude, skill) => {
+            let skill = skill.as_deref().unwrap_or("code-review high");
+            let prompt = match scope {
+                Scope::Pr(pr) => format!("/{skill} {}", pr.number),
+                Scope::Local { .. } => format!("/{skill} Review {}.", scope.describe()),
+            };
+            // The prompt goes through stdin: `--allowedTools` is variadic and would swallow it.
             let mut cmd = claude(agent);
             cmd.args(["--allowedTools", CLAUDE_READ_TOOLS]).args(&agent.args);
-            claude_result(&cmd::run(&mut cmd, Some(&format!("/{skill} {}", pr.number)))?)
+            claude_result(&cmd::run(&mut cmd, Some(&prompt))?)
         }
         (Tool::Codex, None) => {
             let out_file = TempFile::new("review.txt");
             let mut cmd = codex(agent);
-            cmd.args(["exec", "review", "--base", &format!("origin/{}", pr.base), "--output-last-message"])
+            cmd.args(["exec", "review", "--base", &scope.base_ref(), "--output-last-message"])
                 .arg(&out_file.0)
                 .args(&agent.args);
             cmd::run(&mut cmd, None)?;
             std::fs::read_to_string(&out_file.0).context("codex wrote no review")
-        }
-        (Tool::Claude, None) => {
-            // The prompt goes through stdin: `--allowedTools` is variadic and would swallow it.
-            let mut cmd = claude(agent);
-            cmd.args(["--allowedTools", CLAUDE_READ_TOOLS]).args(&agent.args);
-            claude_result(&cmd::run(&mut cmd, Some(&format!("/code-review high {}", pr.number)))?)
         }
     }
 }
