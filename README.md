@@ -29,7 +29,7 @@ cr fix [TARGET]      # alias: cr f
 cr init              # write the default config
 ```
 
-- **`cr review`** checks out and pulls the PR branch, runs the codex and claude reviews in parallel, merges their findings into one deduplicated list, and posts it as a PR comment. `--no-comment` only prints it; `--reviewers codex` runs a subset.
+- **`cr review`** checks out and pulls the PR branch, runs the codex and claude reviews (plus codex's `ponytail-review` skill, if installed) in parallel with a live status display, merges their findings into one deduplicated list, and posts it as a PR comment. `--no-comment` only prints it; `--reviewers codex` runs a subset.
 - **`cr fix`** reads the latest cr review plus all other PR comments, lets an agent validate and fix each one and run the project's checks, then commits, pushes and posts a status table. The comment only says green when every item was handled and every check passed. `--no-push` leaves the fixes uncommitted.
 
 Both commands refuse to run on a dirty working tree. Raw reviewer output is kept in `.git/cr/<pr>/`.
@@ -47,6 +47,10 @@ tool = "codex"            # codex | claude
 [[reviewers]]
 tool = "claude"
 model = "opus"            # omit to use the CLI's own default
+
+[[reviewers]]
+tool = "codex"
+skill = "ponytail-review" # review with a skill; skipped if not installed
 
 [merger]
 tool = "codex"

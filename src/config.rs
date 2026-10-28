@@ -29,20 +29,27 @@ pub struct Agent {
     /// Extra arguments appended verbatim to every invocation.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub args: Vec<String>,
+    /// Reviewers only: review with this skill instead of the tool's built-in review.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skill: Option<String>,
 }
 
 impl Agent {
     pub fn new(tool: Tool) -> Self {
-        Self { tool, model: None, args: Vec::new() }
+        Self { tool, model: None, args: Vec::new(), skill: None }
     }
 }
 
 impl fmt::Display for Agent {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match &self.model {
-            Some(model) => write!(f, "{} ({model})", self.tool),
-            None => write!(f, "{}", self.tool),
+        write!(f, "{}", self.tool)?;
+        if let Some(skill) = &self.skill {
+            write!(f, "/{skill}")?;
         }
+        if let Some(model) = &self.model {
+            write!(f, " ({model})")?;
+        }
+        Ok(())
     }
 }
 
@@ -61,7 +68,12 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            reviewers: vec![Agent::new(Tool::Codex), Agent::new(Tool::Claude)],
+            reviewers: vec![
+                Agent::new(Tool::Codex),
+                Agent::new(Tool::Claude),
+                // Skipped when the skill isn't installed.
+                Agent { skill: Some("ponytail-review".into()), ..Agent::new(Tool::Codex) },
+            ],
             merger: Agent { model: Some("gpt-6-luna".into()), ..Agent::new(Tool::Codex) },
             fixer: Agent::new(Tool::Claude),
             auto_comment: true,
@@ -120,6 +132,8 @@ const TEMPLATE_HEADER: &str = "\
 #
 # Each agent has a `tool` (codex | claude), an optional `model` (omit it to use
 # the CLI's own default) and optional `args` passed verbatim to the CLI.
+# A reviewer with a `skill` runs that skill instead of the tool's built-in
+# review; codex reviewers whose skill isn't installed are skipped.
 # Set `host` (e.g. \"github\") to skip detecting the git host from the origin remote.
 
 ";
@@ -168,7 +182,7 @@ mod tests {
         assert!(!config.auto_comment);
         assert_eq!(
             config.reviewers,
-            vec![Agent { tool: Tool::Claude, model: Some("opus".into()), args: vec!["--verbose".into()] }]
+            vec![Agent { model: Some("opus".into()), args: vec!["--verbose".into()], ..Agent::new(Tool::Claude) }]
         );
         assert_eq!(config.merger, Config::default().merger);
     }

@@ -7,6 +7,7 @@ mod fix;
 mod git;
 mod host;
 mod review;
+mod status;
 mod target;
 
 use anyhow::{Result, bail};

@@ -8,6 +8,7 @@ use crate::config::{Agent, Config};
 use crate::finding::{self, Finding, Merged};
 use crate::git;
 use crate::host::{Host, Pr};
+use crate::status;
 
 pub struct Options {
     pub comment: bool,
@@ -19,30 +20,37 @@ pub fn run(config: &Config, host: &dyn Host, pr: &Pr, opts: Options) -> Result<(
     let out_dir = git::git_dir()?.join("cr").join(pr.number.to_string());
     std::fs::create_dir_all(&out_dir)?;
 
-    let names: Vec<String> = opts.reviewers.iter().map(Agent::to_string).collect();
-    eprintln!("Reviewing PR #{} with {}...", pr.number, names.join(", "));
-    let results: Vec<Result<String>> = std::thread::scope(|s| {
-        let handles: Vec<_> = opts.reviewers.iter().map(|a| s.spawn(|| agent::review(a, pr))).collect();
-        handles.into_iter().map(|h| h.join().expect("reviewer thread panicked")).collect()
-    });
+    let (reviewers, missing): (Vec<&Agent>, Vec<&Agent>) =
+        opts.reviewers.iter().partition(|a| agent::skill_installed(a));
+    for a in missing {
+        eprintln!("Skipping {a}: skill not installed");
+    }
+    if reviewers.is_empty() {
+        bail!("no reviewers to run");
+    }
+
+    eprintln!("Reviewing PR #{}:", pr.number);
+    let names: Vec<String> = reviewers.iter().map(|a| a.to_string()).collect();
+    let jobs = reviewers.iter().map(|&a| move || agent::review(a, pr)).collect();
+    let results = status::run(&names, jobs);
 
     let mut reviews = Vec::new();
     for (i, (name, result)) in names.iter().zip(results).enumerate() {
         match result {
             Ok(text) => {
-                save(&out_dir, &format!("{i}-{}.md", opts.reviewers[i].tool), &text);
-                eprintln!("  {name}: done");
+                save(&out_dir, &format!("{i}-{}.md", reviewers[i].tool), &text);
                 reviews.push((name.clone(), text));
             }
-            Err(e) => eprintln!("  {name}: failed: {e:#}"),
+            Err(e) => eprintln!("{name} failed: {e:#}"),
         }
     }
     if reviews.is_empty() {
         bail!("all reviewers failed");
     }
 
-    eprintln!("Merging findings with {}...", config.merger);
-    let findings = merge(&config.merger, pr, &reviews)?;
+    let findings = status::run_one(format!("merging with {}", config.merger), || {
+        merge(&config.merger, pr, &reviews)
+    })?;
     let used: Vec<String> = reviews.into_iter().map(|(name, _)| name).collect();
     println!("{}", comment::render_findings(&findings, &used));
 

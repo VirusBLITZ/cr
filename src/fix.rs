@@ -8,6 +8,7 @@ use crate::config::Config;
 use crate::finding::{self, FixReport};
 use crate::git;
 use crate::host::{Host, Pr};
+use crate::status;
 
 pub struct Options {
     pub push: bool,
@@ -49,7 +50,6 @@ pub fn run(config: &Config, host: &dyn Host, pr: &Pr, opts: Options) -> Result<(
         writeln!(listing, "### {id}: comment by @{}{location}\n\n{}\n", c.author, c.body)?;
     }
 
-    eprintln!("Fixing {} item(s) on PR #{} with {}...", items.len(), pr.number, config.fixer);
     let prompt = format!(
         "You are addressing review feedback on PR #{} ({} -> {}). The PR branch is checked out in the \
          current directory.\n\n\
@@ -64,7 +64,9 @@ pub fn run(config: &Config, host: &dyn Host, pr: &Pr, opts: Options) -> Result<(
          Answer only with JSON matching the schema, with one `results` entry per item.\n\n{listing}",
         pr.number, pr.head, pr.base
     );
-    let answer = agent::run(&config.fixer, &prompt, Mode::Write, Some(&finding::fix_schema()))?;
+    let answer = status::run_one(format!("fixing {} item(s) with {}", items.len(), config.fixer), || {
+        agent::run(&config.fixer, &prompt, Mode::Write, Some(&finding::fix_schema()))
+    })?;
     let mut report: FixReport = finding::parse_json(&answer)?;
     report.keep_final_checks();
 

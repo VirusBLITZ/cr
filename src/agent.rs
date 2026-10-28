@@ -23,10 +23,23 @@ pub enum Mode {
 const CLAUDE_READ_TOOLS: &str = "Read,Grep,Glob,Bash(git:*),Bash(gh:*)";
 const CLAUDE_WRITE_TOOLS: &str = "Read,Grep,Glob,Edit,Write,Bash";
 
-/// Runs the tool's built-in code review against the PR and returns its report.
+/// Runs the agent's review skill, or the tool's built-in review, against the PR.
 pub fn review(agent: &Agent, pr: &Pr) -> Result<String> {
-    match agent.tool {
-        Tool::Codex => {
+    match (agent.tool, &agent.skill) {
+        (Tool::Codex, Some(skill)) => {
+            let prompt = format!(
+                "${skill} Review PR #{}: the changes on branch `{}` against `origin/{}` \
+                 (`git diff origin/{}...HEAD`). Do not change any files.",
+                pr.number, pr.head, pr.base, pr.base
+            );
+            run(agent, &prompt, Mode::ReadOnly, None)
+        }
+        (Tool::Claude, Some(skill)) => {
+            let mut cmd = claude(agent);
+            cmd.args(["--allowedTools", CLAUDE_READ_TOOLS]).args(&agent.args);
+            claude_result(&cmd::run(&mut cmd, Some(&format!("/{skill} {}", pr.number)))?)
+        }
+        (Tool::Codex, None) => {
             let out_file = TempFile::new("review.txt");
             let mut cmd = codex(agent);
             cmd.args(["exec", "review", "--base", &format!("origin/{}", pr.base), "--output-last-message"])
@@ -35,11 +48,31 @@ pub fn review(agent: &Agent, pr: &Pr) -> Result<String> {
             cmd::run(&mut cmd, None)?;
             std::fs::read_to_string(&out_file.0).context("codex wrote no review")
         }
-        Tool::Claude => {
+        (Tool::Claude, None) => {
             // The prompt goes through stdin: `--allowedTools` is variadic and would swallow it.
             let mut cmd = claude(agent);
             cmd.args(["--allowedTools", CLAUDE_READ_TOOLS]).args(&agent.args);
             claude_result(&cmd::run(&mut cmd, Some(&format!("/code-review high {}", pr.number)))?)
+        }
+    }
+}
+
+/// Whether the agent's skill (if any) can be found. Claude skills also come
+/// from plugins and built-ins, so they are assumed to be present.
+pub fn skill_installed(agent: &Agent) -> bool {
+    let Some(skill) = &agent.skill else { return true };
+    match agent.tool {
+        Tool::Claude => true,
+        Tool::Codex => {
+            let codex_home = std::env::var_os("CODEX_HOME")
+                .map(PathBuf::from)
+                .or_else(|| dirs::home_dir().map(|h| h.join(".codex")));
+            let agents_home = dirs::home_dir().map(|h| h.join(".agents"));
+            // The repo root is the working directory, so repo-local skills are relative.
+            [codex_home, agents_home, Some(".codex".into()), Some(".agents".into())]
+                .into_iter()
+                .flatten()
+                .any(|dir| dir.join("skills").join(skill).join("SKILL.md").is_file())
         }
     }
 }
