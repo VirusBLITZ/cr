@@ -88,8 +88,17 @@ impl FixOutcome<'_> {
         let all_handled = self.items.iter().all(|item| {
             self.report.results.iter().any(|r| r.id == item.id && r.status != Status::Skipped)
         });
-        let checks_pass = !self.report.checks.is_empty() && self.report.checks.iter().all(|c| c.passed);
-        all_handled && checks_pass
+        // At least one check must pass; failures that predate the fix are shown but don't block.
+        // shortcut: `already_failing` is the fixer's own claim, unverified; re-run flagged checks on a
+        // pre-fix snapshot if a mislabelled regression ever slips through.
+        let checks = &self.report.checks;
+        let checks_pass = checks.iter().any(|c| c.passed) && checks.iter().all(|c| c.passed || c.already_failing);
+        all_handled && checks_pass && !self.fixed_without_changes()
+    }
+
+    /// The fixer claimed fixes, but no reviewed file changed.
+    fn fixed_without_changes(&self) -> bool {
+        matches!(self.changes, Changes::None) && self.report.results.iter().any(|r| r.status == Status::Fixed)
     }
 
     /// The PR comment: the summary plus the marker cr uses to recognise it.
@@ -104,6 +113,9 @@ impl FixOutcome<'_> {
             "## cr fix: not everything is green ⚠️\n\n".to_owned()
         };
         match self.changes {
+            Changes::None if self.fixed_without_changes() => {
+                out.push_str("⚠️ Findings were marked fixed, but no files changed.\n\n")
+            }
             Changes::None => out.push_str("No code changes were needed.\n\n"),
             Changes::Pushed(sha) => writeln!(out, "Fixes pushed in {sha}.\n").unwrap(),
             Changes::Uncommitted => out.push_str("Fixes are left uncommitted in the working tree.\n\n"),
@@ -131,8 +143,12 @@ impl FixOutcome<'_> {
             out.push_str("⚠️ No checks were run.\n");
         }
         for check in &self.report.checks {
-            let mark = if check.passed { "✅" } else { "❌" };
-            writeln!(out, "- {mark} `{}`", check.command).unwrap();
+            match (check.passed, check.already_failing) {
+                (true, _) => writeln!(out, "- ✅ `{}`", check.command),
+                (false, true) => writeln!(out, "- ⚪ `{}` (already failing before the fix)", check.command),
+                (false, false) => writeln!(out, "- ❌ `{}`", check.command),
+            }
+            .unwrap();
         }
         out
     }
@@ -176,16 +192,29 @@ mod tests {
                 FixResult { id: "F1".into(), status: Status::Fixed, note: String::new() },
                 FixResult { id: "C1".into(), status: Status::Invalid, note: String::new() },
             ],
-            checks: vec![Check { command: "cargo test".into(), passed: true }],
+            checks: vec![Check { command: "cargo test".into(), passed: true, already_failing: false }],
         };
-        assert!(FixOutcome { items: &items, report: &report, changes: Changes::None }.is_green());
+        assert!(FixOutcome { items: &items, report: &report, changes: Changes::Uncommitted }.is_green());
+        let unchanged = FixOutcome { items: &items, report: &report, changes: Changes::None };
+        assert!(!unchanged.is_green(), "a fix that changed no files is not green");
+        assert!(unchanged.render().contains("marked fixed, but no files changed"));
 
         report.checks[0].passed = false;
-        assert!(!FixOutcome { items: &items, report: &report, changes: Changes::None }.is_green());
+        assert!(!FixOutcome { items: &items, report: &report, changes: Changes::Uncommitted }.is_green());
+
+        let fmt = Check { command: "cargo fmt --check".into(), passed: false, already_failing: true };
+        report.checks.push(fmt);
+        let outcome = FixOutcome { items: &items, report: &report, changes: Changes::Uncommitted };
+        assert!(!outcome.is_green(), "pre-existing failures alone are not green");
 
         report.checks[0].passed = true;
+        let outcome = FixOutcome { items: &items, report: &report, changes: Changes::Uncommitted };
+        assert!(outcome.is_green(), "a pre-existing failure doesn't block once another check passes");
+        assert!(outcome.render().contains("⚪ `cargo fmt --check` (already failing before the fix)"));
+        report.checks.pop();
+
         report.results.pop();
-        let outcome = FixOutcome { items: &items, report: &report, changes: Changes::None };
+        let outcome = FixOutcome { items: &items, report: &report, changes: Changes::Uncommitted };
         assert!(!outcome.is_green());
         assert!(outcome.render().contains("| C1 | ⚠️ not reported |"));
     }

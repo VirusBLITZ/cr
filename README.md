@@ -25,12 +25,14 @@ Run inside the PR's repository. `TARGET` is a PR URL, PR number or branch name; 
 
 ```sh
 cr local             # alias: cr l — review + fix local work, no PR needed
+cr loop              # repeat cr local until nothing valid is found
 cr review [TARGET]   # alias: cr r
 cr fix [TARGET]      # alias: cr f
 cr init              # write the default config
 ```
 
 - **`cr local`** reviews your work before a PR exists: everything that differs from the base branch, committed and uncommitted. It merges the findings and lets the fixer handle them. Nothing is committed, pushed or posted, so check `git diff` afterwards. `--base <ref>` picks the base (default: origin's default branch, else `main`/`master`); `--no-fix` only reviews. Works in any git repo, GitHub or not.
+- **`cr loop`** repeats `cr local` until a review finds nothing valid. Findings the fixer rejected are passed to the merger in later rounds, so re-raised ones are dropped before the fixer runs. It stops early when the fixer changes nothing, and fails when a round isn't green or after `--max-rounds` rounds (default 3). Each round costs about as much as one `cr local`, so a run costs up to `--max-rounds` × that.
 
 - **`cr review`** checks out and pulls the PR branch, runs the codex and claude reviews (plus codex's `ponytail-review` skill, if installed) in parallel with a live status display, merges their findings into one deduplicated list, and posts it as a PR comment. `--no-comment` only prints it; `--reviewers codex` runs a subset.
 - **`cr fix`** reads the latest cr review plus all other PR comments, lets an agent validate and fix each one and run the project's checks, then commits, pushes and posts a status table. The comment only says green when every item was handled and every check passed. `--no-push` leaves the fixes uncommitted.
@@ -41,7 +43,7 @@ Inside a VS Code terminal, the formatted report (`report.md`) also opens in the 
 "workbench.editorAssociations": { "**/.git/cr/**/report.md": "vscode.markdown.preview.editor" }
 ```
 
-`review` and `fix` refuse to run on a dirty working tree. Raw reviewer output is kept in `.git/cr/<pr>/` (`.git/cr/local/` for `cr local`).
+`review` and `fix` refuse to run on a dirty working tree. Raw reviewer output is kept in `.git/cr/<pr>/` (`.git/cr/local/` for `cr local`, `.git/cr/local/round-<n>/` for `cr loop`).
 
 ## Configuration
 

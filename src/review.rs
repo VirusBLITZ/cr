@@ -20,7 +20,7 @@ pub struct Options {
 pub fn run(config: &Config, host: &dyn Host, pr: &Pr, opts: Options) -> Result<()> {
     git::fetch(&pr.base)?;
     let out_dir = out_dir(&pr.number.to_string())?;
-    let (findings, used) = collect(config, &opts.reviewers, Scope::Pr(pr), &out_dir)?;
+    let (findings, used) = collect(config, &opts.reviewers, Scope::Pr(pr), &out_dir, "")?;
     let report = comment::render_findings(&findings, &used);
     println!("{report}");
     open_report(&out_dir, &report);
@@ -42,12 +42,14 @@ pub fn out_dir(name: &str) -> Result<PathBuf> {
 }
 
 /// Runs every reviewer on `scope` in parallel and merges their findings.
+/// `rejected` lists findings rejected in earlier rounds, which the merger drops.
 /// Returns the findings and the names of the reviewers that succeeded.
 pub fn collect(
     config: &Config,
     reviewers: &[Agent],
     scope: Scope,
     out_dir: &Path,
+    rejected: &str,
 ) -> Result<(Vec<Finding>, Vec<String>)> {
     let (reviewers, missing): (Vec<&Agent>, Vec<&Agent>) =
         reviewers.iter().partition(|a| agent::skill_installed(a));
@@ -78,13 +80,13 @@ pub fn collect(
     }
 
     let findings = status::run_one(format!("merging with {}", config.merger), || {
-        merge(&config.merger, scope, &reviews)
+        merge(&config.merger, scope, &reviews, rejected)
     })?;
     let used = reviews.into_iter().map(|(name, _)| name).collect();
     Ok((findings, used))
 }
 
-fn merge(merger: &Agent, scope: Scope, reviews: &[(String, String)]) -> Result<Vec<Finding>> {
+fn merge(merger: &Agent, scope: Scope, reviews: &[(String, String)], rejected: &str) -> Result<Vec<Finding>> {
     let mut prompt = format!(
         "Below are code reviews of {} from different reviewers. \
          Merge them into one deduplicated list of findings:\n\
@@ -102,6 +104,12 @@ fn merge(merger: &Agent, scope: Scope, reviews: &[(String, String)]) -> Result<V
     );
     for (name, text) in reviews {
         prompt.push_str(&format!("\n## Review from {name}\n\n{text}\n"));
+    }
+    if !rejected.is_empty() {
+        prompt.push_str(&format!(
+            "\n## Findings already rejected in earlier rounds\n\n\
+             These were judged not to be real problems. Drop every finding that restates one of them.\n\n{rejected}"
+        ));
     }
 
     let answer = agent::run(merger, &prompt, Mode::ReadOnly, Some(&finding::merged_schema()))?;

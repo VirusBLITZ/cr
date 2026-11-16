@@ -89,8 +89,11 @@ pub fn apply(config: &Config, scope: Scope, items: &[Item], listing: &str) -> Re
          actionable (e.g. \"LGTM\", CI bot noise), mark it `invalid` and say why in `note`.\n\
          2. If it is valid, fix it with a minimal, focused change and mark it `fixed`.\n\
          3. If you cannot fix it safely, mark it `skipped` and explain in `note`.\n\n\
-         Then run the project's build, tests and linters (whatever this repository uses) and report every \
-         command in `checks`, once, with its final result. If a check fails because of your changes, fix it and rerun. \
+         Before changing anything, run the project's build, tests and linters (whatever this repository uses) once. \
+         After your fixes, run them again and report every command in `checks`, once, with its final result. If a \
+         check fails because of your changes, fix it and rerun. Set `already_failing` to true only for a check that \
+         already failed in that first run, before you changed anything (e.g. `cargo fmt --check` in a repository that \
+         was never formatted); it is not yours to fix. \
          Do not commit or push.\n\
          Answer only with JSON matching the schema, with one `results` entry per item.\n\n{listing}",
         scope.describe()

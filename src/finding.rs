@@ -59,6 +59,9 @@ pub struct FixResult {
 pub struct Check {
     pub command: String,
     pub passed: bool,
+    /// Failed before the fixer changed anything, so it doesn't count against the fix.
+    #[serde(default)]
+    pub already_failing: bool,
 }
 
 #[derive(Deserialize, Debug)]
@@ -131,10 +134,11 @@ pub fn fix_schema() -> Value {
                 "items": {
                     "type": "object",
                     "additionalProperties": false,
-                    "required": ["command", "passed"],
+                    "required": ["command", "passed", "already_failing"],
                     "properties": {
                         "command": { "type": "string" },
-                        "passed": { "type": "boolean" }
+                        "passed": { "type": "boolean" },
+                        "already_failing": { "type": "boolean" }
                     }
                 }
             }
@@ -162,7 +166,7 @@ mod tests {
 
     #[test]
     fn keeps_last_run_of_each_check() {
-        let check = |command: &str, passed| Check { command: command.into(), passed };
+        let check = |command: &str, passed| Check { command: command.into(), passed, already_failing: false };
         let mut report = FixReport {
             results: vec![],
             checks: vec![check("cargo test", false), check("cargo fmt", true), check("cargo test", true)],
